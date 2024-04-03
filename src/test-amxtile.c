@@ -10,11 +10,15 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <stdbool.h>
+#include <string.h>
 
-#define MAX 1024
-#define MAX_ROWS 16
-#define MAX_COLS 64
-#define STRIDE 64
+#define ROW0 16
+#define COL0 64
+#define ROW1 16
+#define COL1 64
+#define ROW2 16
+#define COL2 64
+
 #define ARCH_GET_XCOMP_PERM     0x1022
 #define ARCH_REQ_XCOMP_PERM     0x1023
 #define XFEATURE_XTILECFG       17
@@ -33,45 +37,47 @@ typedef struct __tile_config
 /* Initialize tile config */
 static void init_tile_config (__tilecfg *tileinfo)
 {
-  int i;
+
+  memset(tileinfo, 0, sizeof(*tileinfo));
+
   tileinfo->palette_id = 1;
   tileinfo->start_row = 0;
 
-  for (i = 0; i < 1; ++i)
-  {
-    tileinfo->colsb[i] = MAX_ROWS;
-    tileinfo->rows[i] =  MAX_ROWS;
-  }
+  tileinfo->rows[0] =  ROW0;
+  tileinfo->colsb[0] = COL0;
 
-  for (i = 1; i < 4; ++i)
-  {
-    tileinfo->colsb[i] = MAX_COLS;
-    tileinfo->rows[i] =  MAX_ROWS;
-  }
+  tileinfo->rows[1] =  ROW1;
+  tileinfo->colsb[1] = COL1;
+
+  tileinfo->rows[2] =  ROW2;
+  tileinfo->colsb[2] = COL2;
 
   _tile_loadconfig (tileinfo);
 }
 
 /* Initialize int8_t buffer */
-static void init_buffer (int8_t *buf, int8_t value)
+static void init_buffer (int8_t *buf, int32_t rows, int32_t colsb, int8_t value)
 {
-  int rows, colsb, i, j;
-  rows  = MAX_ROWS;
-  colsb = MAX_COLS;
+  int i, j;
 
   for (i = 0; i < rows; i++)
     for (j = 0; j < colsb; j++)
     {
+#if 0
         buf[i * colsb + j] = value;
+#else
+        if (value == 1)
+           buf[i * colsb + j] = value;
+	else
+           buf[i * colsb + j] = i;
+#endif
     }
 }
 
 /* Initialize int32_t buffer */
-static void init_buffer32 (int32_t *buf, int32_t value)
+static void init_buffer32 (int32_t *buf, int32_t rows, int32_t colsb, int32_t value)
 {
-  int rows, colsb, i, j;
-  rows  = MAX_ROWS;
-  colsb = MAX_COLS;
+  int i, j;
   int colsb2=colsb/4;
 
   for (i = 0; i < rows; i++)
@@ -101,10 +107,11 @@ static bool set_tiledata_use()
 /* Print int8_t buffer */
 static void print_buffer(int8_t* buf, int32_t rows, int32_t colsb) 
 {
+   printf("rows:%d colsb:%d\n", rows, colsb);
    for (int i = 0; i < rows; i++) {
      for (int j = 0; j < (colsb); j++)
      {
-         printf("%d ", buf[i * colsb + j]);
+         printf("%3d ", buf[i * colsb + j]);
      }
      printf("\n");
    }
@@ -114,24 +121,25 @@ static void print_buffer(int8_t* buf, int32_t rows, int32_t colsb)
 /* Print int32_t buffer */
 static void print_buffer32(int32_t* buf, int32_t rows, int32_t colsb)
 {
+   int colsb2=colsb/4;
+   printf("rows:%d colsb2:%d\n", rows, colsb2);
    for (int i = 0; i < rows; i++) {
-     for (int j = 0; j < (colsb); j++)
+     for (int j = 0; j < (colsb2); j++)
      {
-         printf("%d ", buf[i * colsb + j]);
+         printf("%3d ", buf[i * colsb2 + j]);
      }
      printf("\n");
    }
    printf("\n");
 }
 
+static   __tilecfg tile_data = {0};
+static   int8_t src1[ROW1*COL1];
+static   int8_t src2[ROW2*COL2];
+static   int32_t res[ROW0*COL0/4];
+
 int main(){
 
-   __tilecfg tile_data = {0};
-   int8_t src1[MAX];
-   int8_t src2[MAX];
-   int32_t res[MAX/4];
-   int rows  = MAX_ROWS;
-   int colsb = MAX_COLS;
 
    // Request permission to linux kernel to run AMX 
    if (!set_tiledata_use())
@@ -141,26 +149,24 @@ int main(){
    init_tile_config (&tile_data);
 
    // Init src matrix buffers with data
-   init_buffer (src1, 2);
-   print_buffer(src1, rows, colsb);
+   init_buffer(src1, ROW1, COL1, 1);
+   print_buffer(src1, ROW1, COL1);
  
-   init_buffer (src2, 2);
-   print_buffer(src2, rows, colsb);
+   init_buffer(src2,  ROW2, COL2, 1);
+   print_buffer(src2, ROW2, COL2);
 
-   // Init dst matrix buffers with data
-   init_buffer32 (res, 0);
+   init_buffer32(res, ROW0, COL0, 0);
+   print_buffer32 (res, ROW0, COL0);
 
    // Load tile rows from memory
-   _tile_loadd (2, src1, STRIDE);
-   _tile_loadd (3, src2, STRIDE);
-   _tile_loadd (1, res, STRIDE);
+   _tile_loadd(0, res,  COL0);
+   _tile_loadd(1, src1, COL1);
+   _tile_loadd(2, src2, COL2);
 
    // Compute dot-product of bytes in tiles 
-   _tile_dpbssd (1, 2, 3);
-
-   // Store the tile data to memory
-   _tile_stored (1, res, STRIDE);
-   print_buffer32(res, rows, colsb/4);
+   _tile_dpbssd(0, 1, 2);
+   _tile_stored(0, res, COL0);
+   print_buffer32(res, ROW0, COL0);
 
    // Release the tile configuration to return to the init state, 
    // which releases all storage it currently holds
